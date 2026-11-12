@@ -1,0 +1,54 @@
+name: Build Android APK
+
+on:
+workflow_dispatch:
+push:
+branches: [main, master]
+
+jobs:
+build:
+runs-on: ubuntu-latest
+container:
+image: barichello/godot-ci:4.3
+steps:
+- uses: actions/checkout@v4
+
+  - name: Unzip project if uploaded as a zip
+    run: |
+      for z in *.zip; do [ -f "$z" ] && unzip -o -q "$z"; done || true
+      P=$(dirname "$(find . -name project.godot | head -1)")
+      echo "PROJECT_DIR=$P" >> $GITHUB_ENV
+
+  - name: Set up Godot, export templates and Android paths
+    run: |
+      mkdir -p ~/.local/share/godot/export_templates ~/.config/godot
+      if [ -d /root/.local/share/godot/export_templates/4.3.stable ] && [ "$HOME" != "/root" ]; then
+        cp -r /root/.local/share/godot/export_templates/4.3.stable ~/.local/share/godot/export_templates/
+      fi
+      SDK=${ANDROID_HOME:-${ANDROID_SDK_ROOT:-/usr/lib/android-sdk}}
+      JDK=${JAVA_HOME:-$(dirname $(dirname $(readlink -f $(which java))))}
+      cat > ~/.config/godot/editor_settings-4.3.tres <<EOT
+      [gd_resource type="EditorSettings" format=3]
+
+      [resource]
+      export/android/android_sdk_path = "$SDK"
+      export/android/java_sdk_path = "$JDK"
+      EOT
+      keytool -keyalg RSA -genkeypair -alias androiddebugkey -keypass android \
+        -keystore $HOME/debug.keystore -storepass android \
+        -dname "CN=Android Debug,O=Android,C=US" -validity 9999 -deststoretype pkcs12
+      echo "GODOT_ANDROID_KEYSTORE_DEBUG_PATH=$HOME/debug.keystore" >> $GITHUB_ENV
+      echo "GODOT_ANDROID_KEYSTORE_DEBUG_USER=androiddebugkey" >> $GITHUB_ENV
+      echo "GODOT_ANDROID_KEYSTORE_DEBUG_PASSWORD=android" >> $GITHUB_ENV
+
+  - name: Import and export APK
+    run: |
+      cd "$PROJECT_DIR"
+      mkdir -p build
+      godot --headless --import || true
+      godot --headless --export-debug "Android" build/wfl.apk
+
+  - uses: actions/upload-artifact@v4
+    with:
+      name: wfl-apk
+      path: ${{ env.PROJECT_DIR }}/build/wfl.apk
